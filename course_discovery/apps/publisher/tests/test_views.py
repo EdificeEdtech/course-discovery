@@ -415,6 +415,22 @@ class CreateCourseRunViewTests(SiteMixin, TestCase):
         response = self.client.get(self.create_course_run_url_new)
         self.assertEqual(response.status_code, 200)
 
+    def test_courserun_form_for_course_with_entitlements(self):
+        """ Verify that the Seat fields are hidden for Courses that use entitlements. """
+        self.course.version = Course.ENTITLEMENT_VERSION
+        self.course.save()
+
+        response = self.client.get(self.create_course_run_url_new)
+        self.assertContains(response, '<div class="layout-full layout js-seat-form hidden">', status_code=200)
+
+    def test_courserun_form_for_course_without_entitlements(self):
+        """ Verify that the Seat fields are visible for Courses that do not use entitlements. """
+        self.course.version = Course.SEAT_VERSION
+        self.course.save()
+
+        response = self.client.get(self.create_course_run_url_new)
+        self.assertContains(response, '<div class="layout-full layout js-seat-form">', status_code=200)
+
     def test_create_course_run_without_permission(self):
         """
         Verify that a course run create page shows the proper error when non-publisher user tries to

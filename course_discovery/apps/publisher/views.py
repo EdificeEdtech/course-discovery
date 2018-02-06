@@ -676,7 +676,8 @@ class CreateCourseRunView(mixins.LoginRequiredMixin, mixins.PublisherUserRequire
         context = {
             'cancel_url': reverse('publisher:publisher_course_detail', kwargs={'pk': parent_course.pk}),
             'run_form': run_form,
-            'seat_form': seat_form
+            'seat_form': seat_form,
+            'hide_seat_form': parent_course.uses_entitlements
         }
         return context
 
