@@ -727,7 +727,7 @@ class CreateRunFromDashboardView(CreateCourseRunView):
     def get_context_data(self, **kwargs):
         context = {
             'cancel_url': reverse('publisher:publisher_dashboard'),
-            'course_form': self.course_form(),
+            'course_form': self.course_form(queryset=Course.objects.none()),
             'run_form': self.run_form(),
             'seat_form': self.seat_form(),
             'hide_seat_form': False
