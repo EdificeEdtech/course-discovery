@@ -32,8 +32,9 @@ from course_discovery.apps.publisher.dataloader.create_courses import process_co
 from course_discovery.apps.publisher.emails import send_email_for_published_course_run_editing
 from course_discovery.apps.publisher.forms import (AdminImportCourseForm, CourseEntitlementForm, CourseForm,
                                                    CourseRunForm, CourseSearchForm, SeatForm)
-from course_discovery.apps.publisher.models import (PAID_SEATS, Course, CourseRun, CourseRunState, CourseState,
-                                                    CourseUserRole, OrganizationExtension, Seat, UserAttributes)
+from course_discovery.apps.publisher.models import (PAID_SEATS, Course, CourseEntitlement, CourseRun, CourseRunState,
+                                                    CourseState, CourseUserRole, OrganizationExtension, Seat,
+                                                    UserAttributes)
 from course_discovery.apps.publisher.utils import (get_internal_users, has_role_for_course, is_internal_user,
                                                    is_project_coordinator_user, is_publisher_admin, make_bread_crumbs)
 from course_discovery.apps.publisher.wrappers import CourseRunWrapper
@@ -615,12 +616,42 @@ class CreateCourseRunView(mixins.LoginRequiredMixin, mixins.PublisherUserRequire
             context.update(ctx_overrides)
         return render(request, self.template_name, context, status=status)
 
-    def _process_post_request(self, request, parent_course, run_form, seat_form, ctx_overrides=None):
-        user = request.user
+    def _process_post_request(self, request, parent_course, context=None):
+        context = context or {}
+
+        run_form = self.run_form(request.POST)
+        context['run_form'] = run_form
+
+        if parent_course.uses_entitlements:
+            context['hide_seat_form'] = True
+
+            # Fail if Seat fields are present in the POST data.
+            seat_data_in_form = any([key for key in self.seat_form.declared_fields.keys() if key in request.POST])
+            if seat_data_in_form:
+                messages.error(
+                    request, _('The page could not be updated. Make sure that all values are correct, then try again.')
+                )
+                return self._render_post_error(request, ctx_overrides=context)
+
+            try:
+                entitlement = parent_course.entitlements.get()
+                seat_form = self.seat_form({
+                    'type': CourseEntitlement.MODE_TO_SEAT_TYPE_MAPPING[entitlement.mode],
+                    'price': entitlement.price
+                })
+            except (CourseEntitlement.DoesNotExist, CourseEntitlement.MultipleObjectsReturned):
+                messages.error(
+                    request,
+                    _('The certificate configuration for this Course is incorrect. Please fix it, then try again.')
+                )
+                return self._render_post_error(request, ctx_overrides=context)
+        else:
+            seat_form = self.seat_form(request.POST)
+            context['seat_form'] = seat_form
+            context['hide_seat_form'] = False
 
         course_user_roles = parent_course.course_user_roles.filter(role__in=COURSE_ROLES)
         has_default_course_user_roles = course_user_roles.count() == len(COURSE_ROLES)
-
         if not (has_default_course_user_roles or waffle.switch_is_active('disable_publisher_permissions')):
             logger.error(
                 'Course [%s] is missing default course roles. Current roles [%s], required roles [%s]',
@@ -635,16 +666,17 @@ class CreateCourseRunView(mixins.LoginRequiredMixin, mixins.PublisherUserRequire
                     'Please contact your partner manager to create default roles.'
                 )
             )
-            return self._render_post_error(request, ctx_overrides=ctx_overrides)
+            return self._render_post_error(request, ctx_overrides=context)
 
         if not (run_form.is_valid() and seat_form.is_valid()):
             messages.error(
                 request, _('The page could not be updated. Make sure that all values are correct, then try again.')
             )
-            return self._render_post_error(request, ctx_overrides=ctx_overrides)
+            return self._render_post_error(request, ctx_overrides=context)
 
         try:
             with transaction.atomic():
+                user = request.user
                 course_run = run_form.save(commit=False, course=parent_course, changed_by=user)
                 self._set_last_run_data(course_run)
                 seat_form.save(course_run=course_run, changed_by=user)
@@ -665,7 +697,7 @@ class CreateCourseRunView(mixins.LoginRequiredMixin, mixins.PublisherUserRequire
             error_msg = self._format_post_exception_message(ex)
             messages.error(request, error_msg)
             logger.exception('Unable to create course run and seat for course [%s].', parent_course.id)
-            return self._render_post_error(request, ctx_overrides=ctx_overrides)
+            return self._render_post_error(request, ctx_overrides=context)
 
     def get_context_data(self, **kwargs):
         parent_course = self._get_parent_course()
@@ -682,13 +714,7 @@ class CreateCourseRunView(mixins.LoginRequiredMixin, mixins.PublisherUserRequire
         return context
 
     def post(self, request, *args, **kwargs):
-        parent_course = self._get_parent_course()
-        run_form = self.run_form(request.POST)
-        seat_form = self.seat_form(request.POST)
-        return self._process_post_request(request, parent_course, run_form, seat_form, ctx_overrides={
-            'run_form': run_form,
-            'seat_form': seat_form
-        })
+        return self._process_post_request(request, self._get_parent_course())
 
 
 class CreateRunFromDashboardView(CreateCourseRunView):
@@ -703,31 +729,21 @@ class CreateRunFromDashboardView(CreateCourseRunView):
             'cancel_url': reverse('publisher:publisher_dashboard'),
             'course_form': self.course_form(),
             'run_form': self.run_form(),
-            'seat_form': self.seat_form()
+            'seat_form': self.seat_form(),
+            'hide_seat_form': False
         }
         return context
 
     def post(self, request, *args, **kwargs):
         course_form = self.course_form(request.POST)
-        run_form = self.run_form(request.POST)
-        seat_form = self.seat_form(request.POST)
-        ctx_overrides = {
-            'course_form': course_form,
-            'run_form': run_form,
-            'seat_form': seat_form,
-        }
-
         if not course_form.is_valid():
             messages.error(
                 request, _('The page could not be updated. Make sure that all values are correct, then try again.')
             )
-            return self._render_post_error(request, ctx_overrides=ctx_overrides)
+            return self._render_post_error(request, ctx_overrides={'run_form': self.run_form(request.POST)})
 
         self.parent_course = course_form.cleaned_data.get('course')
-
-        return self._process_post_request(
-            request, self.parent_course, run_form, seat_form, ctx_overrides=ctx_overrides
-        )
+        return self._process_post_request(request, self.parent_course, context={'course_form': course_form})
 
 
 class CourseRunEditView(mixins.LoginRequiredMixin, mixins.PublisherPermissionMixin, UpdateView):

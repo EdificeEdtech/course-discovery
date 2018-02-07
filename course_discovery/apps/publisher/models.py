@@ -515,6 +515,11 @@ class CourseEntitlement(TimeStampedModel):
         'default': 0.00,
     }
 
+    MODE_TO_SEAT_TYPE_MAPPING = {
+        VERIFIED: Seat.VERIFIED,
+        PROFESSIONAL: Seat.PROFESSIONAL
+    }
+
     course = models.ForeignKey(Course, related_name='entitlements')
     mode = models.CharField(max_length=63, choices=COURSE_MODE_CHOICES, verbose_name='Course mode')
     price = models.DecimalField(**PRICE_FIELD_CONFIG)
